@@ -1,0 +1,102 @@
+# =========================
+# Receivers → wires
+# =========================
+
+[[receiver]]
+address = "0.0.0.0:50053"
+buffer_size = 1024
+aes256_key_hex = "ea8ccb51eefcdd058b0110c4adebaf351acbf43db2ad250fdc0d4131c959dfec"
+
+  [receiver.tls]
+  enable = true
+  server_cert = "/app/etc/keys/tls/server.crt"
+  server_key  = "/app/etc/keys/tls/server.key"
+  ca          = "/app/etc/keys/tls/ca.crt"
+  server_name = "localhost"
+
+  [receiver.oauth]
+  mode = "merge"
+  issuer_base = "https://damocles:3000"
+  jwks_url = "https://damocles:3000/api/auth/.well-known/jwks.json"
+  required_aud = ["your-api"]        # ← set to what Damocles actually mints
+  required_scopes = ["write:data"]   # ← set to what you mint
+  jwks_cache_seconds = 300
+  introspect_url = "https://damocles:3000/api/auth/oauth/introspect"
+  auth_type = "basic"
+  client_id = "steeze-local-cli"
+  client_secret = "local-secret"
+  cache_seconds = 300
+
+  [[receiver.pipeline]]
+  datatype     = "feedback.v1"
+  transformers = ["sentiment", "tagger"]
+  output       = "wireA"
+
+[[receiver]]
+address = "0.0.0.0:50054"
+buffer_size = 1024
+aes256_key_hex = "ea8ccb51eefcdd058b0110c4adebaf351acbf43db2ad250fdc0d4131c959dfec"
+
+  [receiver.tls]
+  enable = true
+  server_cert = "/app/etc/keys/tls/server.crt"
+  server_key  = "/app/etc/keys/tls/server.key"
+  ca          = "/app/etc/keys/tls/ca.crt"
+  server_name = "localhost"
+
+  [receiver.oauth]
+  mode = "merge"
+  issuer_base = "https://damocles:3000"
+  jwks_url = "https://damocles:3000/api/auth/.well-known/jwks.json"
+  required_aud = ["your-api"]
+  required_scopes = ["write:data"]
+  jwks_cache_seconds = 300
+  introspect_url = "https://damocles:3000/api/auth/oauth/introspect"
+  auth_type = "basic"
+  client_id = "steeze-local-cli"
+  client_secret = "local-secret"
+  cache_seconds = 300
+
+  [[receiver.pipeline]]
+  datatype     = "feedback.v1"
+  transformers = ["tagger"]
+  output       = "wireB"
+
+# =========================
+# Sink: S3 parquet (fan-in)
+# =========================
+
+[[sink]]
+type   = "s3"
+name   = "debug-s3"
+inputs = ["wireA", "wireB"]
+
+  [sink.s3]
+  bucket           = "steeze-dev"
+  prefix_template  = "debug/{yyyy}/{MM}/{dd}/{HH}/{mm}/"  # drop {org} for now
+  format           = "parquet"
+  minute_partitions = false
+
+    [sink.s3.batch]
+    max_records = 1          # flush every record
+    max_bytes   = 1
+    max_age_ms  = 1000
+
+    [sink.s3.parquet]
+    compression      = "zstd"
+    roll_window_ms   = 1000
+    roll_max_records = 1
+
+    [sink.s3.sse]
+    type          = "aes256"   # avoid KMS during debug
+
+    [sink.s3.aws]
+    region           = "us-east-1"
+    role_arn         = ""       # disable AssumeRole; use static creds
+    session_name     = ""
+    duration_minutes = 0
+    endpoint_url     = "http://localstack:4566"
+    use_path_style   = true
+    static_access_key_id     = "test"
+    static_secret_access_key = "test"
+    insecure_skip_tls_verify = true

@@ -1,0 +1,29 @@
+services:
+  exodus:
+    build: .
+    image: steeze/exodus:dev
+    container_name: exodus
+    env_file: [ ./.env ]
+    ports:
+      - "5001:5001"   # HTTPS API
+      - "50053:50053" # Receiver A
+      - "50054:50054" # Receiver B
+    volumes:
+      - ./manifest.toml:/app/manifest.toml:ro
+      - ./etc/keys/tls:/app/etc/keys/tls:ro
+      - ./log:/app/log
+    healthcheck:
+      test: ["CMD","curl","--fail","--silent","--show-error",
+             "--cacert","/app/etc/keys/tls/ca.crt",
+             "https://localhost:5001/ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [ /tmp ]
+    networks: [ steeze-edge ]
+
+networks:
+  steeze-edge:
+    external: true
