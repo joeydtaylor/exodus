@@ -73,22 +73,22 @@ inputs = ["wireA"]
 
   [sink.s3]
   bucket            = "steeze-dev"
-  prefix_template   = "debug/{yyyy}/{MM}/{dd}/{HH}/{mm}/"
+  prefix_template   = "debug/{yyyy}/{MM}/{dd}/{HH}/"
   format            = "parquet"
   minute_partitions = false
 
     [sink.s3.batch]
-    max_records = 1
-    max_bytes   = 1
-    max_age_ms  = 1000
+    max_records = 200000
+    max_bytes   = 134217728
+    max_age_ms  = 60000
 
     [sink.s3.parquet]
     compression      = "zstd"
-    roll_window_ms   = 1000
-    roll_max_records = 1
+    roll_window_ms   = 60000
+    roll_max_records = 200000
 
     [sink.s3.sse]
-    type = "aes256"
+    type = "aes256"   # switch to "kms" + key_id in real AWS
 
     [sink.s3.aws]
     region                   = "us-east-1"
@@ -102,7 +102,7 @@ inputs = ["wireA"]
     insecure_skip_tls_verify = true
 
 # ======================================
-# Sink: Kafka (wireB) — PLAINTEXT + SASL
+# Sink: Kafka (wireB) — TLS + SASL
 # ======================================
 
 [[sink]]
@@ -111,11 +111,11 @@ name   = "debug-kafka"
 inputs = ["wireB"]
 
   [sink.kafka]
-  brokers      = ["redpanda:9092"]   # internal broker on Docker network
+  brokers      = ["redpanda:9093"]   # internal TLS listener
   topic        = "feedback-demo"
   format       = "ndjson"
   key_template = "{customerId}"
-  headers      = { source = "exodus" }
+  headers      = { source = "exodus", schema = "feedback.v1" }
 
     [sink.kafka.batch]
     max_records             = 10000
@@ -128,3 +128,10 @@ inputs = ["wireB"]
     sasl_mechanism = "SCRAM-SHA-256"
     username       = "app"
     password       = "app-secret"
+
+    # TLS for broker auth (no client certs required)
+    [sink.kafka.tls]
+    enable               = true
+    ca                   = "/app/etc/keys/tls/ca.crt"
+    server_name          = "localhost"
+    insecure_skip_verify = false

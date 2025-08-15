@@ -58,6 +58,9 @@ import (
 //	KAFKA_TLS_ENABLE=true
 //	KAFKA_TLS_CA_FILES=./tls/ca.crt,../tls/ca.crt,../../tls/ca.crt
 //	KAFKA_TLS_SERVER_NAME=localhost
+//	KAFKA_TLS_CLIENT_CERT=/app/etc/keys/tls/client.crt
+//	KAFKA_TLS_CLIENT_KEY=/app/etc/keys/tls/client.key
+//	KAFKA_TLS_INSECURE=false
 //	KAFKA_SASL_MECHANISM=SCRAM-SHA-256|SCRAM-SHA-512
 //	KAFKA_SASL_USERNAME=app
 //	KAFKA_SASL_PASSWORD=app-secret
@@ -387,6 +390,22 @@ func StartReceiverForwardFromEnv[T any](ctx context.Context, address string, buf
 			kTLS, err = builder.TLSFromCAFilesStrict(caFiles, serverName)
 			if err != nil {
 				return nil, err
+			}
+			// Optional mTLS: present client cert if provided
+			certPath := strings.TrimSpace(os.Getenv("KAFKA_TLS_CLIENT_CERT"))
+			keyPath := strings.TrimSpace(os.Getenv("KAFKA_TLS_CLIENT_KEY"))
+			if certPath != "" && keyPath != "" {
+				cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+				if err != nil {
+					return nil, err
+				}
+				kTLS.Certificates = []tls.Certificate{cert}
+			}
+			if strings.EqualFold(os.Getenv("KAFKA_TLS_INSECURE"), "true") {
+				kTLS.InsecureSkipVerify = true // dev only
+			}
+			if kTLS.MinVersion == 0 {
+				kTLS.MinVersion = tls.VersionTLS12
 			}
 		}
 
