@@ -108,10 +108,13 @@ func EnableBuilderType[T any](typeName string) {
 			oauthEnabled := oauthIssuer != "" && oauthClientID != "" && oauthSecret != ""
 
 			logger := builder.NewLogger(builder.LoggerWithDevelopment(true))
-			ctx = context.Background()
+			buildCtx := ctx
+			if buildCtx == nil {
+				buildCtx = context.Background()
+			}
 
 			// Wire[T]
-			wire := builder.NewWire[T](ctx, builder.WireWithLogger[T](logger))
+			wire := builder.NewWire[T](buildCtx, builder.WireWithLogger[T](logger))
 
 			// Options
 			perf := builder.NewPerformanceOptions(useSnappy, builder.COMPRESS_SNAPPY)
@@ -143,7 +146,7 @@ func EnableBuilderType[T any](typeName string) {
 				)
 
 				relay := builder.NewForwardRelay[T](
-					ctx,
+					buildCtx,
 					builder.ForwardRelayWithLogger[T](logger),
 					builder.ForwardRelayWithTarget[T](targets...),
 					builder.ForwardRelayWithPerformanceOptions[T](perf),
@@ -157,7 +160,7 @@ func EnableBuilderType[T any](typeName string) {
 				start = relay.Start
 			} else {
 				relay := builder.NewForwardRelay[T](
-					ctx,
+					buildCtx,
 					builder.ForwardRelayWithLogger[T](logger),
 					builder.ForwardRelayWithTarget[T](targets...),
 					builder.ForwardRelayWithPerformanceOptions[T](perf),
@@ -169,10 +172,10 @@ func EnableBuilderType[T any](typeName string) {
 				start = relay.Start
 			}
 
-			if err := wire.Start(ctx); err != nil {
+			if err := wire.Start(buildCtx); err != nil {
 				return nil, fmt.Errorf("wire start: %w", err)
 			}
-			if err := start(ctx); err != nil {
+			if err := start(buildCtx); err != nil {
 				return nil, fmt.Errorf("relay start: %w", err)
 			}
 

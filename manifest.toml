@@ -18,8 +18,8 @@ aes256_key_hex = "ea8ccb51eefcdd058b0110c4adebaf351acbf43db2ad250fdc0d4131c959df
   mode = "merge"
   issuer_base = "https://damocles:3000"
   jwks_url = "https://damocles:3000/api/auth/.well-known/jwks.json"
-  required_aud = ["your-api"]        # ← set to what Damocles actually mints
-  required_scopes = ["write:data"]   # ← set to what you mint
+  required_aud = ["your-api"]
+  required_scopes = ["write:data"]
   jwks_cache_seconds = 300
   introspect_url = "https://damocles:3000/api/auth/oauth/introspect"
   auth_type = "basic"
@@ -63,22 +63,22 @@ aes256_key_hex = "ea8ccb51eefcdd058b0110c4adebaf351acbf43db2ad250fdc0d4131c959df
   output       = "wireB"
 
 # =========================
-# Sink: S3 parquet (fan-in)
+# Sink: S3 parquet (wireA)
 # =========================
 
 [[sink]]
 type   = "s3"
 name   = "debug-s3"
-inputs = ["wireA", "wireB"]
+inputs = ["wireA"]
 
   [sink.s3]
-  bucket           = "steeze-dev"
-  prefix_template  = "debug/{yyyy}/{MM}/{dd}/{HH}/{mm}/"  # drop {org} for now
-  format           = "parquet"
+  bucket            = "steeze-dev"
+  prefix_template   = "debug/{yyyy}/{MM}/{dd}/{HH}/{mm}/"
+  format            = "parquet"
   minute_partitions = false
 
     [sink.s3.batch]
-    max_records = 1          # flush every record
+    max_records = 1
     max_bytes   = 1
     max_age_ms  = 1000
 
@@ -88,15 +88,43 @@ inputs = ["wireA", "wireB"]
     roll_max_records = 1
 
     [sink.s3.sse]
-    type          = "aes256"   # avoid KMS during debug
+    type = "aes256"
 
     [sink.s3.aws]
-    region           = "us-east-1"
-    role_arn         = ""       # disable AssumeRole; use static creds
-    session_name     = ""
-    duration_minutes = 0
-    endpoint_url     = "http://localstack:4566"
-    use_path_style   = true
+    region                   = "us-east-1"
+    role_arn                 = ""   # keep AssumeRole disabled with LocalStack
+    session_name             = ""
+    duration_minutes         = 0
+    endpoint_url             = "http://localstack:4566"
+    use_path_style           = true
     static_access_key_id     = "test"
     static_secret_access_key = "test"
     insecure_skip_tls_verify = true
+
+# ======================================
+# Sink: Kafka (wireB) — PLAINTEXT + SASL
+# ======================================
+
+[[sink]]
+type   = "kafka"
+name   = "debug-kafka"
+inputs = ["wireB"]
+
+  [sink.kafka]
+  brokers      = ["redpanda:9092"]   # internal broker on Docker network
+  topic        = "feedback-demo"
+  format       = "ndjson"
+  key_template = "{customerId}"
+  headers      = { source = "exodus" }
+
+    [sink.kafka.batch]
+    max_records             = 10000
+    max_bytes_mb            = 16
+    max_age_ms              = 800
+    writer_batch_timeout_ms = 400
+
+    [sink.kafka.security]
+    client_id      = "exodus-kafka-writer"
+    sasl_mechanism = "SCRAM-SHA-256"
+    username       = "app"
+    password       = "app-secret"

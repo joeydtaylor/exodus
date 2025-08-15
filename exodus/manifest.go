@@ -152,14 +152,16 @@ type Receiver struct {
 type SinkType string
 
 const (
-	SinkTypeS3 SinkType = "s3"
+	SinkTypeS3    SinkType = "s3"
+	SinkTypeKafka SinkType = "kafka"
 )
 
 type Sink struct {
-	Type   SinkType `toml:"type"`         // "s3"
-	Name   string   `toml:"name"`         // optional, for logging/metrics
-	Inputs []string `toml:"inputs"`       // wires to fan-in (must match ReceiverPipeline.output)
-	S3     *S3Sink  `toml:"s3,omitempty"` // for type == "s3"
+	Type   SinkType   `toml:"type"`            // "s3" | "kafka"
+	Name   string     `toml:"name"`            // optional, for logging/metrics
+	Inputs []string   `toml:"inputs"`          // wires to fan-in (must match ReceiverPipeline.output)
+	S3     *S3Sink    `toml:"s3,omitempty"`    // for type == "s3"
+	Kafka  *KafkaSink `toml:"kafka,omitempty"` // for type == "kafka"
 }
 
 type S3Sink struct {
@@ -205,6 +207,64 @@ type AWSClient struct {
 	StaticAccessKeyID     string `toml:"static_access_key_id"`
 	StaticSecretAccessKey string `toml:"static_secret_access_key"`
 	InsecureSkipTLSVerify bool   `toml:"insecure_skip_tls_verify"`
+}
+
+/* ===== Kafka sink ===== */
+
+type KafkaSink struct {
+	// Connection / topic
+	Brokers []string `toml:"brokers"` // e.g., ["127.0.0.1:19092"]
+	Topic   string   `toml:"topic"`
+
+	// Payload encoding
+	Format string `toml:"format"` // "ndjson" (default) | "json"
+
+	// Message key & headers
+	KeyTemplate     string            `toml:"key_template"` // e.g., "{customerId}"
+	HeaderTemplates map[string]string `toml:"headers"`      // static headers
+
+	// Batching (adapter-level aggregation before produce)
+	Batch *KafkaBatch `toml:"batch"`
+
+	// kafka-go writer tuning
+	Writer *KafkaWriter `toml:"writer"`
+
+	// Security
+	Security *KafkaSecurity `toml:"security"`
+
+	// Client identity
+	ClientID string `toml:"client_id"` // default: "exodus-kafka-writer"
+}
+
+type KafkaBatch struct {
+	MaxRecords int `toml:"max_records"`  // default: 10000
+	MaxBytesMB int `toml:"max_bytes_mb"` // default: 16
+	MaxAgeMS   int `toml:"max_age_ms"`   // default: 800
+}
+
+type KafkaWriter struct {
+	BatchTimeoutMS int    `toml:"batch_timeout_ms"` // default: 400
+	Balancer       string `toml:"balancer"`         // "least_bytes"(def) | "round_robin" | "hash"
+}
+
+type KafkaSecurity struct {
+	TLS  *KafkaTLS  `toml:"tls"`
+	SASL *KafkaSASL `toml:"sasl"`
+}
+
+type KafkaTLS struct {
+	Enable             bool     `toml:"enable"`
+	CAFiles            []string `toml:"ca_files"`    // one or many
+	ServerName         string   `toml:"server_name"` // SNI
+	InsecureSkipVerify bool     `toml:"insecure_skip_tls_verify"`
+	ClientCert         string   `toml:"client_cert"` // optional mTLS
+	ClientKey          string   `toml:"client_key"`  // optional mTLS
+}
+
+type KafkaSASL struct {
+	Mechanism string `toml:"mechanism"` // "SCRAM-SHA-256" | "SCRAM-SHA-512" | "PLAIN"
+	Username  string `toml:"username"`
+	Password  string `toml:"password"`
 }
 
 /* ===========================
@@ -412,6 +472,92 @@ func (c *Config) Validate() error {
 				}
 			}
 			// SSE block: optional; nothing strict
+
+		case SinkTypeKafka:
+			if s.Kafka == nil {
+				return fmt.Errorf("sink %d: kafka block required for type 'kafka'", i)
+			}
+			k := s.Kafka
+			if len(k.Brokers) == 0 {
+				return fmt.Errorf("sink %d: kafka.brokers required", i)
+			}
+			if strings.TrimSpace(k.Topic) == "" {
+				return fmt.Errorf("sink %d: kafka.topic required", i)
+			}
+			// defaults + validation
+			if strings.TrimSpace(k.Format) == "" {
+				k.Format = "ndjson"
+			} else {
+				ff := strings.ToLower(strings.TrimSpace(k.Format))
+				if ff != "ndjson" && ff != "json" {
+					return fmt.Errorf("sink %d: kafka.format %q invalid (ndjson|json)", i, k.Format)
+				}
+			}
+			if k.Batch == nil {
+				k.Batch = &KafkaBatch{}
+			}
+			if k.Batch.MaxRecords == 0 {
+				k.Batch.MaxRecords = 10000
+			}
+			if k.Batch.MaxBytesMB == 0 {
+				k.Batch.MaxBytesMB = 16
+			}
+			if k.Batch.MaxAgeMS == 0 {
+				k.Batch.MaxAgeMS = 800
+			}
+			if k.Batch.MaxRecords < 0 || k.Batch.MaxBytesMB < 0 || k.Batch.MaxAgeMS < 0 {
+				return fmt.Errorf("sink %d: kafka.batch values must be >= 0", i)
+			}
+			if k.Writer == nil {
+				k.Writer = &KafkaWriter{}
+			}
+			if k.Writer.BatchTimeoutMS == 0 {
+				k.Writer.BatchTimeoutMS = 400
+			}
+			if strings.TrimSpace(k.Writer.Balancer) == "" {
+				k.Writer.Balancer = "least_bytes"
+			} else {
+				b := strings.ToLower(strings.TrimSpace(k.Writer.Balancer))
+				switch b {
+				case "least_bytes", "round_robin", "hash":
+					// ok
+				default:
+					return fmt.Errorf("sink %d: kafka.writer.balancer %q invalid", i, k.Writer.Balancer)
+				}
+			}
+			if strings.TrimSpace(k.ClientID) == "" {
+				k.ClientID = "exodus-kafka-writer"
+			}
+			// TLS sanity
+			if k.Security != nil && k.Security.TLS != nil && k.Security.TLS.Enable {
+				t := k.Security.TLS
+				if len(t.CAFiles) == 0 {
+					return fmt.Errorf("sink %d: kafka.security.tls.ca_files required when enable=true", i)
+				}
+				if strings.TrimSpace(t.ServerName) == "" && !t.InsecureSkipVerify {
+					return fmt.Errorf("sink %d: kafka.security.tls.server_name required unless insecure_skip_tls_verify=true", i)
+				}
+				// if one of client cert/key set, require both
+				if (strings.TrimSpace(t.ClientCert) != "" && strings.TrimSpace(t.ClientKey) == "") ||
+					(strings.TrimSpace(t.ClientKey) != "" && strings.TrimSpace(t.ClientCert) == "") {
+					return fmt.Errorf("sink %d: kafka.security.tls client_cert and client_key must be provided together", i)
+				}
+			}
+			// SASL sanity
+			if k.Security != nil && k.Security.SASL != nil {
+				m := strings.ToUpper(strings.TrimSpace(k.Security.SASL.Mechanism))
+				switch m {
+				case "SCRAM-SHA-256", "SCRAM-SHA-512", "PLAIN":
+					if k.Security.SASL.Username == "" || k.Security.SASL.Password == "" {
+						return fmt.Errorf("sink %d: kafka.security.sasl username/password required", i)
+					}
+				case "":
+					// no SASL
+				default:
+					return fmt.Errorf("sink %d: kafka.security.sasl.mechanism %q invalid", i, k.Security.SASL.Mechanism)
+				}
+			}
+
 		default:
 			return fmt.Errorf("sink %d: unknown type %q", i, s.Type)
 		}

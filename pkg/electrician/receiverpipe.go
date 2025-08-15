@@ -20,7 +20,9 @@ import (
 	"github.com/joeydtaylor/electrician/pkg/builder"
 )
 
-// StartReceiverForwardFromEnv wires: ReceivingRelay[T] -> Wire[T]{transforms...} -> { ForwardRelay[T], S3Writer[T] }.
+// StartReceiverForwardFromEnv wires:
+//
+//	ReceivingRelay[T] -> Wire[T]{transforms...} -> { ForwardRelay[T]?, S3Writer[T]?, KafkaWriter[T]? }
 //
 // Forward env (same contract as NewBuilderRelayFromEnv):
 //
@@ -34,12 +36,31 @@ import (
 //	OAUTH_JWKS_URL, OAUTH_ISSUER_BASE, OAUTH_REQUIRED_AUD, OAUTH_SCOPES,
 //	OAUTH_INTROSPECT_URL, OAUTH_INTROSPECT_AUTH, OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_INTROSPECT_BEARER
 //
-// S3 writer env (matches your example/env):
+// S3 writer env:
 //
 //	S3_REGION, S3_ENDPOINT, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ASSUME_ROLE_ARN
 //	S3_BUCKET, S3_PREFIX_TEMPLATE, ORG_ID
 //	S3_SSE_MODE, S3_KMS_KEY_ARN
 //	PARQUET_COMPRESSION, ROLL_WINDOW_MS, ROLL_MAX_RECORDS, BATCH_MAX_RECORDS, BATCH_MAX_BYTES_MB, BATCH_MAX_AGE_MS
+//
+// Kafka writer env:
+//
+//	KAFKA_BROKERS=host:port[,host2:port2]   (required with KAFKA_TOPIC to enable)
+//	KAFKA_TOPIC=feedback-demo
+//	KAFKA_FORMAT=ndjson|json                (default ndjson)
+//	KAFKA_KEY_TEMPLATE={customerId}         (optional)
+//	KAFKA_HEADERS=k=v,k2=v2                 (optional)
+//	KAFKA_BATCH_MAX_RECORDS=10000
+//	KAFKA_BATCH_MAX_BYTES_MB=16
+//	KAFKA_BATCH_MAX_AGE_MS=800
+//	KAFKA_WRITER_BATCH_TIMEOUT_MS=400
+//	KAFKA_CLIENT_ID=exodus-kafka-writer
+//	KAFKA_TLS_ENABLE=true
+//	KAFKA_TLS_CA_FILES=./tls/ca.crt,../tls/ca.crt,../../tls/ca.crt
+//	KAFKA_TLS_SERVER_NAME=localhost
+//	KAFKA_SASL_MECHANISM=SCRAM-SHA-256|SCRAM-SHA-512
+//	KAFKA_SASL_USERNAME=app
+//	KAFKA_SASL_PASSWORD=app-secret
 func StartReceiverForwardFromEnv[T any](ctx context.Context, address string, buffer int, transforms ...func(T) (T, error)) (stop func(), err error) {
 	if strings.TrimSpace(address) == "" {
 		return nil, errors.New("receiver: address required")
@@ -63,7 +84,7 @@ func StartReceiverForwardFromEnv[T any](ctx context.Context, address string, buf
 		return cur, nil
 	}
 
-	// ---- Wire (shared by forward + s3 writer)
+	// ---- Wire (shared by forward + all sinks)
 	wire := builder.NewWire[T](
 		ctx,
 		builder.WireWithLogger[T](logger),
@@ -159,7 +180,6 @@ func StartReceiverForwardFromEnv[T any](ctx context.Context, address string, buf
 			forwardStart, forwardStop = f.Start, f.Stop
 		}
 	} else {
-		// no forward targets configured; keep nil start/stop
 		forwardStart = func(context.Context) error { return nil }
 		forwardStop = func() {}
 	}
@@ -276,77 +296,157 @@ func StartReceiverForwardFromEnv[T any](ctx context.Context, address string, buf
 	}
 
 	// ====================
-	// S3 writer (fan-in this wire)
+	// Sinks (fan-out wire)
 	// ====================
-	// Client
-	awsRegion := envOr("S3_REGION", "us-east-1")
-	endpoint := envOr("S3_ENDPOINT", "http://localhost:4566")
-	usePathStyle := true // LocalStack compat; can add env if needed
 
-	roleARN := strings.TrimSpace(os.Getenv("AWS_ASSUME_ROLE_ARN"))
-	sessionName := envOr("AWS_SESSION_NAME", "electrician-writer")
-	durationMin := envInt("AWS_SESSION_DURATION_MIN", 15)
-	ak := os.Getenv("AWS_ACCESS_KEY_ID")
-	sk := os.Getenv("AWS_SECRET_ACCESS_KEY")
-
-	cli, err := builder.NewS3ClientAssumeRole(
-		ctx,
-		awsRegion,
-		roleARN,
-		sessionName,
-		time.Duration(durationMin)*time.Minute,
-		"", // external ID
-		aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(ak, sk, "")),
-		endpoint,
-		usePathStyle,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Writer knobs
-	bucket := envOr("S3_BUCKET", "steeze-dev")
-	prefixTemplate := envOr("S3_PREFIX_TEMPLATE", "debug/{yyyy}/{MM}/{dd}/{HH}/{mm}/")
-	orgID := strings.TrimSpace(os.Getenv("ORG_ID"))
-	if orgID != "" {
-		// Replace single token {org} if present; leave other tokens ({yyyy}...) for adapter to expand.
-		prefixTemplate = strings.ReplaceAll(prefixTemplate, "{org}", orgID)
-	}
-	parquetCompression := strings.ToLower(envOr("PARQUET_COMPRESSION", "zstd")) // zstd|snappy|gzip
-	rollWindow := envInt("ROLL_WINDOW_MS", 300_000)
-	rollMaxRecords := envInt("ROLL_MAX_RECORDS", 250_000)
-	batchMaxRecords := envInt("BATCH_MAX_RECORDS", 500_000)
-	batchMaxBytes := envInt("BATCH_MAX_BYTES_MB", 256) * (1 << 20)
-	batchMaxAge := envDurMs("BATCH_MAX_AGE_MS", 5*time.Minute)
-
-	sseType := strings.ToLower(envOr("S3_SSE_MODE", "aes256")) // "aws:kms" | "s3" | "aes256"
-	kmsAliasArn := strings.TrimSpace(os.Getenv("S3_KMS_KEY_ARN"))
-
-	// Adapter
-	adapter := builder.NewS3ClientAdapter[T](
-		ctx,
-		builder.S3ClientAdapterWithClientAndBucket[T](cli, bucket),
-		builder.S3ClientAdapterWithFormat[T]("parquet", ""),
-		builder.S3ClientAdapterWithWriterPrefixTemplate[T](prefixTemplate),
-		builder.S3ClientAdapterWithBatchSettings[T](batchMaxRecords, batchMaxBytes, batchMaxAge),
-		builder.S3ClientAdapterWithWriterFormatOptions[T](map[string]string{
-			"parquet_compression": parquetCompression,
-			"roll_window_ms":      strconv.Itoa(rollWindow),
-			"roll_max_records":    strconv.Itoa(rollMaxRecords),
-		}),
-		builder.S3ClientAdapterWithSSE[T](sseType, kmsAliasArn),
-		builder.S3ClientAdapterWithWire[T](wire),
-		builder.S3ClientAdapterWithLogger[T](logger),
-	)
-
-	// Control surface
+	// Fan-out controller
 	type writerCtl interface {
 		StartWriter(context.Context) error
 		Stop()
 	}
-	ws, ok := any(adapter).(writerCtl)
-	if !ok {
-		return nil, errors.New("s3 adapter missing StartWriter/Stop")
+	var writers []writerCtl
+
+	// ---- S3 writer (enabled when bucket present)
+	bucket := strings.TrimSpace(envOr("S3_BUCKET", ""))
+	if bucket != "" {
+		// Client
+		awsRegion := envOr("S3_REGION", "us-east-1")
+		endpoint := envOr("S3_ENDPOINT", "http://localhost:4566")
+		usePathStyle := true // LocalStack compat; can add env if needed
+
+		roleARN := strings.TrimSpace(os.Getenv("AWS_ASSUME_ROLE_ARN"))
+		sessionName := envOr("AWS_SESSION_NAME", "electrician-writer")
+		durationMin := envInt("AWS_SESSION_DURATION_MIN", 15)
+		ak := os.Getenv("AWS_ACCESS_KEY_ID")
+		sk := os.Getenv("AWS_SECRET_ACCESS_KEY")
+
+		cli, err := builder.NewS3ClientAssumeRole(
+			ctx,
+			awsRegion,
+			roleARN,
+			sessionName,
+			time.Duration(durationMin)*time.Minute,
+			"", // external ID
+			aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(ak, sk, "")),
+			endpoint,
+			usePathStyle,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		prefixTemplate := envOr("S3_PREFIX_TEMPLATE", "debug/{yyyy}/{MM}/{dd}/{HH}/{mm}/")
+		orgID := strings.TrimSpace(os.Getenv("ORG_ID"))
+		if orgID != "" {
+			prefixTemplate = strings.ReplaceAll(prefixTemplate, "{org}", orgID)
+		}
+		parquetCompression := strings.ToLower(envOr("PARQUET_COMPRESSION", "zstd")) // zstd|snappy|gzip
+		rollWindow := envInt("ROLL_WINDOW_MS", 300_000)
+		rollMaxRecords := envInt("ROLL_MAX_RECORDS", 250_000)
+		batchMaxRecords := envInt("BATCH_MAX_RECORDS", 500_000)
+		batchMaxBytes := envInt("BATCH_MAX_BYTES_MB", 256) * (1 << 20)
+		batchMaxAge := envDurMs("BATCH_MAX_AGE_MS", 5*time.Minute)
+
+		sseType := strings.ToLower(envOr("S3_SSE_MODE", "aes256")) // "aws:kms" | "s3" | "aes256"
+		kmsAliasArn := strings.TrimSpace(os.Getenv("S3_KMS_KEY_ARN"))
+
+		// Adapter
+		s3ad := builder.NewS3ClientAdapter[T](
+			ctx,
+			builder.S3ClientAdapterWithClientAndBucket[T](cli, bucket),
+			builder.S3ClientAdapterWithFormat[T]("parquet", ""),
+			builder.S3ClientAdapterWithWriterPrefixTemplate[T](prefixTemplate),
+			builder.S3ClientAdapterWithBatchSettings[T](batchMaxRecords, batchMaxBytes, batchMaxAge),
+			builder.S3ClientAdapterWithWriterFormatOptions[T](map[string]string{
+				"parquet_compression": parquetCompression,
+				"roll_window_ms":      strconv.Itoa(rollWindow),
+				"roll_max_records":    strconv.Itoa(rollMaxRecords),
+			}),
+			builder.S3ClientAdapterWithSSE[T](sseType, kmsAliasArn),
+			builder.S3ClientAdapterWithWire[T](wire),
+			builder.S3ClientAdapterWithLogger[T](logger),
+		)
+
+		if ws, ok := any(s3ad).(writerCtl); ok {
+			writers = append(writers, ws)
+		} else {
+			return nil, errors.New("s3 adapter missing StartWriter/Stop")
+		}
+	}
+
+	// ---- Kafka writer (enabled when brokers+topic set)
+	kBrokers := splitCSV(os.Getenv("KAFKA_BROKERS"))
+	kTopic := strings.TrimSpace(os.Getenv("KAFKA_TOPIC"))
+	if len(kBrokers) > 0 && kTopic != "" {
+		// Security
+		var kTLS *tls.Config
+		if strings.EqualFold(os.Getenv("KAFKA_TLS_ENABLE"), "true") || os.Getenv("KAFKA_TLS_CA_FILES") != "" {
+			caFiles := splitCSV(envOr("KAFKA_TLS_CA_FILES", "./tls/ca.crt,../tls/ca.crt,../../tls/ca.crt"))
+			serverName := envOr("KAFKA_TLS_SERVER_NAME", "localhost")
+			var err error
+			kTLS, err = builder.TLSFromCAFilesStrict(caFiles, serverName)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		secOpts := []builder.KafkaSecurityOption{
+			builder.WithClientID(envOr("KAFKA_CLIENT_ID", "exodus-kafka-writer")),
+		}
+		if kTLS != nil {
+			secOpts = append(secOpts, builder.WithTLS(kTLS))
+		}
+
+		if mechName := strings.ToUpper(strings.TrimSpace(os.Getenv("KAFKA_SASL_MECHANISM"))); mechName != "" {
+			user := strings.TrimSpace(os.Getenv("KAFKA_SASL_USERNAME"))
+			pass := strings.TrimSpace(os.Getenv("KAFKA_SASL_PASSWORD"))
+			m, err := builder.SASLSCRAM(user, pass, mechName) // returns sasl.Mechanism
+			if err != nil {
+				return nil, err
+			}
+			secOpts = append(secOpts, builder.WithSASL(m))
+		}
+
+		sec := builder.NewKafkaSecurity(secOpts...)
+
+		// kafka-go writer (least-bytes + batch timeout)
+		kBatchTimeout := envInt("KAFKA_WRITER_BATCH_TIMEOUT_MS", 400)
+		kw := builder.NewKafkaGoWriterWithSecurity(
+			kBrokers,
+			kTopic,
+			sec,
+			builder.KafkaGoWriterWithLeastBytes(),
+			builder.KafkaGoWriterWithBatchTimeout(time.Duration(kBatchTimeout)*time.Millisecond),
+		)
+
+		// Adapter
+		kFormat := strings.ToLower(envOr("KAFKA_FORMAT", "ndjson")) // ndjson|json
+		if kFormat != "ndjson" && kFormat != "json" {
+			return nil, errors.New("kafka: KAFKA_FORMAT must be ndjson or json")
+		}
+		kMaxRecords := coalesceInt(os.Getenv("KAFKA_BATCH_MAX_RECORDS"), 10000)
+		kMaxBytes := coalesceInt(os.Getenv("KAFKA_BATCH_MAX_BYTES_MB"), 16) * (1 << 20)
+		kMaxAge := coalesceDurMs(os.Getenv("KAFKA_BATCH_MAX_AGE_MS"), 800*time.Millisecond)
+		keyTpl := os.Getenv("KAFKA_KEY_TEMPLATE") // optional
+		hdrs := parseKV(os.Getenv("KAFKA_HEADERS"))
+
+		kad := builder.NewKafkaClientAdapter[T](
+			ctx,
+			builder.KafkaClientAdapterWithKafkaGoWriter[T](kw),
+			builder.KafkaClientAdapterWithWriterTopic[T](kTopic),
+			builder.KafkaClientAdapterWithWriterFormat[T](kFormat, ""),
+			builder.KafkaClientAdapterWithWriterBatchSettings[T](kMaxRecords, kMaxBytes, kMaxAge),
+			builder.KafkaClientAdapterWithWriterKeyTemplate[T](keyTpl),
+			builder.KafkaClientAdapterWithWriterHeaderTemplates[T](hdrs),
+			builder.KafkaClientAdapterWithWire[T](wire),
+			builder.KafkaClientAdapterWithLogger[T](logger),
+		)
+
+		if kwc, ok := any(kad).(writerCtl); ok {
+			writers = append(writers, kwc)
+		} else {
+			return nil, errors.New("kafka adapter missing StartWriter/Stop")
+		}
 	}
 
 	// =========
@@ -361,13 +461,17 @@ func StartReceiverForwardFromEnv[T any](ctx context.Context, address string, buf
 	if err := receiverStart(ctx); err != nil {
 		return nil, err
 	}
-	if err := ws.StartWriter(ctx); err != nil {
-		return nil, err
+	for _, w := range writers {
+		if err := w.StartWriter(ctx); err != nil {
+			return nil, err
+		}
 	}
 
 	// Stop in reverse
 	return func() {
-		ws.Stop()
+		for i := len(writers) - 1; i >= 0; i-- {
+			writers[i].Stop()
+		}
 		receiverStop()
 		forwardStop()
 		wire.Stop()
@@ -437,6 +541,25 @@ func envInt(k string, def int) int {
 
 func envDurMs(k string, def time.Duration) time.Duration {
 	if v := os.Getenv(k); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return time.Duration(n) * time.Millisecond
+		}
+	}
+	return def
+}
+
+// coalesce helpers for KAFKA_* that prefer specific vars over shared ones
+func coalesceInt(v string, def int) int {
+	if v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+func coalesceDurMs(v string, def time.Duration) time.Duration {
+	if v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			return time.Duration(n) * time.Millisecond
 		}
