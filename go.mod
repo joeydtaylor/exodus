@@ -3,7 +3,7 @@ module github.com/joeydtaylor/exodus
 go 1.24.3
 
 require (
-	github.com/joeydtaylor/steeze-core v0.0.0-20250816031841-4920868f177a
+	github.com/joeydtaylor/steeze-core v0.0.0-20250816042805-e334647f3a48
 	github.com/joho/godotenv v1.5.1
 	go.uber.org/fx v1.24.0
 	go.uber.org/zap v1.27.0
