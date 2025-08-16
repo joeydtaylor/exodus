@@ -1,4 +1,16 @@
 # =========================
+# Routes (inproc) — FIXED
+# =========================
+
+[[route]]
+path   = "/healthz"
+method = "GET"
+codec  = "json"
+  [route.handler]
+  type = "inproc"
+  name = "health.ok"
+
+# =========================
 # Receivers → wires
 # =========================
 
