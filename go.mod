@@ -3,24 +3,18 @@ module github.com/joeydtaylor/exodus
 go 1.24.3
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.38.0
-	github.com/aws/aws-sdk-go-v2/credentials v1.18.4
-	github.com/go-chi/chi v1.5.5
-	github.com/go-chi/chi/v5 v5.2.2
-	github.com/golang-jwt/jwt/v5 v5.3.0
-	github.com/joeydtaylor/electrician v0.0.0-20250815205849-2f35a9900dcb
+	github.com/joeydtaylor/steeze-core v0.0.0-20250816012026-547a523ef424
 	github.com/joho/godotenv v1.5.1
-	github.com/pelletier/go-toml/v2 v2.2.4
-	github.com/prometheus/client_golang v1.23.0
 	go.uber.org/fx v1.24.0
 	go.uber.org/zap v1.27.0
-	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
 require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
+	github.com/aws/aws-sdk-go-v2 v1.38.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.0 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.31.0 // indirect
+	github.com/aws/aws-sdk-go-v2/credentials v1.18.4 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.3 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.3 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.3 // indirect
@@ -37,15 +31,21 @@ require (
 	github.com/aws/smithy-go v1.22.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/go-chi/chi v1.5.5 // indirect
+	github.com/go-chi/chi/v5 v5.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/joeydtaylor/electrician v0.0.0-20250815205849-2f35a9900dcb // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/mjibson/go-dsp v0.0.0-20180508042940-11479a337f12 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/parquet-go/parquet-go v0.25.1 // indirect
+	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
+	github.com/prometheus/client_golang v1.23.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.65.0 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
@@ -66,4 +66,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250115164207-1a7da9e5054f // indirect
 	google.golang.org/grpc v1.71.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )

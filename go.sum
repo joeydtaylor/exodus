@@ -69,6 +69,8 @@ github.com/hexops/gotextdiff v1.0.3 h1:gitA9+qJrrTCsiCl7+kh75nPqQt1cx4ZkudSTLoUq
 github.com/hexops/gotextdiff v1.0.3/go.mod h1:pSWU5MAI3yDq+fZBTazCSJysOMbxWL1BSow5/V2vxeg=
 github.com/joeydtaylor/electrician v0.0.0-20250815205849-2f35a9900dcb h1:JVKDqNwUJBUscNZ8NaLCFRNuENtQXnjvXVvZT+3/HVY=
 github.com/joeydtaylor/electrician v0.0.0-20250815205849-2f35a9900dcb/go.mod h1:Q8gsYjqZMsWxX5Saogzoy4fPVmnvk2i0xiMoV1Ozg8A=
+github.com/joeydtaylor/steeze-core v0.0.0-20250816012026-547a523ef424 h1:kPMu5Gc25PbPQRTCbf76AHvkNbVU2R3lLXVYcxMaksE=
+github.com/joeydtaylor/steeze-core v0.0.0-20250816012026-547a523ef424/go.mod h1:rLcKS9bcWsoTwafqgHKGCH9aFHnRBMYbzRWDLJ1JAIw=
 github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
 github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
 github.com/klauspost/compress v1.15.9/go.mod h1:PhcZ0MbTNciWF3rruxRgKxI5NkcHHrHUDtV4Yw2GlzU=

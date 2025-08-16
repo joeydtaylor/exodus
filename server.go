@@ -10,17 +10,18 @@ import (
 
 	apphandlers "github.com/joeydtaylor/exodus/app/handlers"
 	apptypes "github.com/joeydtaylor/exodus/app/types"
-	"github.com/joeydtaylor/exodus/exodus"
-	"github.com/joeydtaylor/exodus/middleware/auth"
-	"github.com/joeydtaylor/exodus/middleware/logger"
-	"github.com/joeydtaylor/exodus/middleware/metrics"
-	"github.com/joeydtaylor/exodus/transport/httpx"
+	"github.com/joeydtaylor/steeze-core/pkg/core"
+	manifest "github.com/joeydtaylor/steeze-core/pkg/manifest"
+	"github.com/joeydtaylor/steeze-core/pkg/middleware/auth"
+	"github.com/joeydtaylor/steeze-core/pkg/middleware/logger"
+	"github.com/joeydtaylor/steeze-core/pkg/middleware/metrics"
+	"github.com/joeydtaylor/steeze-core/pkg/transport/httpx"
 	"github.com/joho/godotenv"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
 	// Electrician adapters (forward relay / typed publisher)
-	"github.com/joeydtaylor/exodus/pkg/electrician"
+	"github.com/joeydtaylor/steeze-core/pkg/electrician"
 )
 
 // ---- Adapter: electrician.RelayClient -> exodus.RelayClient ----
@@ -29,7 +30,7 @@ type relayAdapter struct {
 	inner electrician.RelayClient
 }
 
-func (a relayAdapter) Request(ctx context.Context, rr exodus.RelayRequest) ([]byte, error) {
+func (a relayAdapter) Request(ctx context.Context, rr core.RelayRequest) ([]byte, error) {
 	return a.inner.Request(ctx, electrician.RelayRequest{
 		Topic:   rr.Topic,
 		Body:    rr.Body,
@@ -37,7 +38,7 @@ func (a relayAdapter) Request(ctx context.Context, rr exodus.RelayRequest) ([]by
 	})
 }
 
-func (a relayAdapter) Publish(ctx context.Context, rr exodus.RelayRequest) error {
+func (a relayAdapter) Publish(ctx context.Context, rr core.RelayRequest) error {
 	return a.inner.Publish(ctx, electrician.RelayRequest{
 		Topic:   rr.Topic,
 		Body:    rr.Body,
@@ -46,7 +47,7 @@ func (a relayAdapter) Publish(ctx context.Context, rr exodus.RelayRequest) error
 }
 
 // Provide a exodus.RelayClient by constructing the electrician client and wrapping it.
-func provideRelayForExodus() (exodus.RelayClient, error) {
+func provideRelayForExodus() (core.RelayClient, error) {
 	ec, err := electrician.NewBuilderRelayFromEnv()
 	if err != nil {
 		return nil, err
@@ -62,13 +63,13 @@ func provideRouter(
 	a *auth.Middleware,
 	lm *logger.Middleware,
 	/* name:"metrics" */ m http.Handler,
-	typed exodus.TypedPublisher,
-	rel exodus.RelayClient,
+	typed core.TypedPublisher,
+	rel core.RelayClient,
 	r httpx.Router,
 	zl *zap.Logger,
 ) http.Handler {
 	cfgPath := envOr("EXODUS_MANIFEST", "manifest.toml")
-	cfg, err := exodus.LoadConfig(cfgPath)
+	cfg, err := core.LoadConfig(cfgPath)
 	if err != nil {
 		// keep this fatal so the app doesn't boot with an unknown routing table
 		zl.Fatal("manifest load failed", zap.Error(err), zap.String("path", cfgPath))
@@ -77,7 +78,7 @@ func provideRouter(
 	// If the manifest has any relay.publish handlers, ensure RelayClient is present.
 	needsRelay := false
 	for _, rt := range cfg.Routes {
-		if rt.Handler.Type == exodus.HandlerType("relay.publish") {
+		if rt.Handler.Type == manifest.HandlerType("relay.publish") {
 			needsRelay = true
 			break
 		}
@@ -93,7 +94,7 @@ func provideRouter(
 		// zl.Fatal("relay client missing; check ELECTRICIAN_TARGET and OAUTH_* env")
 	}
 
-	return exodus.BuildRouter(cfg, exodus.BuildDeps{
+	return core.BuildRouter(cfg, core.BuildDeps{
 		Auth:    a,  // *auth.Middleware
 		LogMW:   lm, // *logger.Middleware
 		Metrics: m,
@@ -127,7 +128,7 @@ func registerHooks(lc fx.Lifecycle, d serverDeps) {
 
 	// Load manifest once to boot any receivers.
 	cfgPath := envOr("EXODUS_MANIFEST", "manifest.toml")
-	cfg, err := exodus.LoadConfig(cfgPath)
+	cfg, err := core.LoadConfig(cfgPath)
 	if err != nil {
 		d.Logger.Fatal("manifest load failed", zap.Error(err), zap.String("path", cfgPath))
 	}
@@ -241,7 +242,7 @@ func main() {
 		fx.Provide(
 			fx.Annotate(
 				electrician.NewTypedPublisherFromEnv,
-				fx.As(new(exodus.TypedPublisher)),
+				fx.As(new(core.TypedPublisher)),
 			),
 		),
 		// - byte relay client (wrap electrician client into exodus interface)
